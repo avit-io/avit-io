@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="220" viewBox="0 0 1280 220" fill="none" role="img" aria-label="alvise vitturi — formally verified observability in agda">
+  <defs>
+    <pattern id="dots" width="18" height="18" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.6" fill="#141414" opacity="0.06"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="220" fill="url(#dots)"/>
+  <text x="64" y="118" font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="60" font-weight="700" letter-spacing="6" fill="#141414">alvise vitturi</text>
+  <circle cx="706" cy="92" r="8" fill="#d71921"/>
+  <text x="66" y="160" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="17" letter-spacing="4" fill="#757575">FORMALLY VERIFIED OBSERVABILITY · AGDA</text>
+</svg>
