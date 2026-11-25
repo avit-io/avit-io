@@ -1,131 +1,209 @@
 #lang racket/base
-;; The avatar: a wizard with a wand in one hand and, in the other, the eval/apply circle; drawn
-;; by stippling like the banner, black dots on a white disc. The scene is a list of shapes,
-;; painted in order: each gives the ink at a point, or #f where it is not.
-;; racket tools/wizard.rkt   (writes wizard.svg)
+;; The avatar: a wizard with a wand in one hand and the eval/apply circle in the other, standing
+;; on a tiled floor in perspective; drawn by stippling, black dots on a white disc.
+;; The scene is solid: cones, spheres and capsules, seen by a camera from three quarters and lit
+;; by the star of the wand. Each pixel's light is found by ray marching (distance fields); the
+;; dots follow the darkness, the outlines follow the edges between objects.
+;; racket tools/wizard.rkt   (writes wizard.svg; deterministic)
 
 (require racket/math racket/list)
 
 (define S 400) (define C 200) (define frame 184)            ; the canvas and the disc
+(define G 300)                                               ; the light is computed on a G×G grid
 
-;; --- geometry ---
+;; --- vectors ---
 
-(define (inside-polygon? pts x y)                           ; even-odd rule
-  (for/fold ([in #f]) ([a pts] [b (append (cdr pts) (list (car pts)))])
-    (if (and (not (eq? (> (cdr a) y) (> (cdr b) y)))
-             (< x (+ (car a) (/ (* (- (car b) (car a)) (- y (cdr a))) (- (cdr b) (cdr a))))))
-        (not in)
-        in)))
+(define (v x y z) (vector x y z))
+(define (vx a) (vector-ref a 0)) (define (vy a) (vector-ref a 1)) (define (vz a) (vector-ref a 2))
+(define (v+ a b) (v (+ (vx a) (vx b)) (+ (vy a) (vy b)) (+ (vz a) (vz b))))
+(define (v- a b) (v (- (vx a) (vx b)) (- (vy a) (vy b)) (- (vz a) (vz b))))
+(define (v* a k) (v (* (vx a) k) (* (vy a) k) (* (vz a) k)))
+(define (dot a b) (+ (* (vx a) (vx b)) (* (vy a) (vy b)) (* (vz a) (vz b))))
+(define (len a) (sqrt (dot a a)))
+(define (unit a) (v* a (/ 1.0 (len a))))
+(define (cross a b) (v (- (* (vy a) (vz b)) (* (vz a) (vy b))) (- (* (vz a) (vx b)) (* (vx a) (vz b))) (- (* (vx a) (vy b)) (* (vy a) (vx b)))))
 
-(define (segment-distance x y a b)
-  (define-values (dx dy) (values (- (car b) (car a)) (- (cdr b) (cdr a))))
-  (define t (max 0 (min 1 (/ (+ (* (- x (car a)) dx) (* (- y (cdr a)) dy)) (+ (sqr dx) (sqr dy))))))
-  (sqrt (+ (sqr (- x (+ (car a) (* t dx)))) (sqr (- y (+ (cdr a) (* t dy)))))))
+;; --- distance fields ---
 
-(define (edge-distance pts x y)
-  (for/fold ([d +inf.0]) ([a pts] [b (append (cdr pts) (list (car pts)))]) (min d (segment-distance x y a b))))
+(define (sphere p c r) (- (len (v- p c)) r))
+(define (capsule p a b r)
+  (define pa (v- p a)) (define ba (v- b a))
+  (define h (max 0.0 (min 1.0 (/ (dot pa ba) (dot ba ba)))))
+  (- (len (v- pa (v* ba h))) r))
+(define (cone p y0 y1 r0 r1)                                 ; vertical, on the axis, radius r0 at y0, r1 at y1
+  (define radial (sqrt (+ (sqr (vx p)) (sqr (vz p)))))
+  (define t (max 0.0 (min 1.0 (/ (- (vy p) y0) (- y1 y0)))))
+  (define side (* (- radial (+ r0 (* t (- r1 r0)))) (/ (- y1 y0) (sqrt (+ (sqr (- y1 y0)) (sqr (- r0 r1)))))))
+  (max side (- y0 (vy p)) (- (vy p) y1)))
+(define (tilted-cone p tip base r)                           ; from base (radius r) to tip, along any axis
+  (define axis (v- tip base)) (define h (len axis)) (define u (v* axis (/ 1.0 h)))
+  (define q (v- p base)) (define along (dot q u))
+  (define radial (len (v- q (v* u along))))
+  (define t (max 0.0 (min 1.0 (/ along h))))
+  (max (* (- radial (* r (- 1 t))) (/ h (sqrt (+ (sqr h) (sqr r))))) (- along) (- along h)))
 
-(define (ellipse-r x y cx cy rx ry) (sqrt (+ (sqr (/ (- x cx) rx)) (sqr (/ (- y cy) ry)))))
+;; --- the scene: (distance . material) ---
 
-;; --- shapes: x y → ink, or #f ---
+(define wand-tip (v 1.02 2.62 0.42))
+(define orb (v -1.0 2.86 0.32)) (define orb-r 0.36)
 
-;; A filled polygon with a dark outline; shade gives the ink inside.
-(define ((polygon pts shade) x y)
-  (cond [(< (edge-distance pts x y) 1.6) 0.95]
-        [(inside-polygon? pts x y) (shade x y)]
-        [else #f]))
+(define (scene p)
+  (argmin car
+          (list
+           (cons (vy p) 'floor)
+           (cons (cone p 0.0 1.85 0.95 0.36) 'robe)
+           (cons (capsule p (v -0.3 1.75 0.05) (v -0.86 2.42 0.28) 0.15) 'robe)          ; the raised arm
+           (cons (tilted-cone p (v -0.42 1.95 0.1) (v -0.84 2.38 0.27) 0.22) 'robe)      ; its sleeve, wide at the wrist
+           (cons (capsule p (v 0.32 1.75 0.05) (v 0.78 1.32 0.38) 0.15) 'robe)           ; the arm with the wand
+           (cons (tilted-cone p (v 0.42 1.62 0.18) (v 0.78 1.32 0.38) 0.22) 'robe)
+           (cons (sphere p (v -0.9 2.5 0.3) 0.1) 'skin)                                   ; hands
+           (cons (sphere p (v 0.82 1.3 0.42) 0.1) 'skin)
+           (cons (capsule p (v 0.66 0.55 0.4) wand-tip 0.025) 'wand)
+           (cons (sphere p (v 0 2.2 0.02) 0.27) 'skin)                                    ; head
+           (cons (sphere p (v 0 2.13 0.26) 0.06) 'skin)                                   ; nose
+           (cons (tilted-cone p (v 0 1.25 0.36) (v 0 2.08 0.16) 0.25) 'beard)
+           (cons (cone p 2.36 2.4 0.62 0.62) 'hat)                                        ; brim
+           (cons (tilted-cone p (v 0.12 3.45 -0.12) (v 0 2.38 0) 0.33) 'hat)
+           (cons (sphere p orb orb-r) 'orb))))
 
-(define ((ellipse cx cy rx ry shade) x y)
-  (define r (ellipse-r x y cx cy rx ry))
-  (cond [(< (abs (- r 1)) (/ 1.6 (min rx ry))) 0.95]
-        [(< r 1) (shade x y)]
-        [else #f]))
+(define (distance p) (car (scene p)))
 
-(define ((stroke a b width ink) x y) (and (< (segment-distance x y a b) width) ink))
+(define (normal p)
+  (define e 0.002)
+  (unit (v (- (distance (v+ p (v e 0 0))) (distance (v- p (v e 0 0))))
+           (- (distance (v+ p (v 0 e 0))) (distance (v- p (v 0 e 0))))
+           (- (distance (v+ p (v 0 0 e))) (distance (v- p (v 0 0 e)))))))
 
-;; An arc of the circle (cx cy r), from angle t0 to t1 (radians, clockwise on screen), with an
-;; arrowhead at t1.
-(define ((arrow cx cy r t0 t1) x y)
-  (define d (sqrt (+ (sqr (- x cx)) (sqr (- y cy)))))
-  (define t (let ([a (atan (- y cy) (- x cx))]) (if (< a t0) (+ a (* 2 pi)) a)))
-  (define tip (cons (+ cx (* r (cos t1))) (+ cy (* r (sin t1)))))
-  (define back (- t1 0.3))
-  (define head (list tip
-                     (cons (+ cx (* (+ r 7) (cos back))) (+ cy (* (+ r 7) (sin back))))
-                     (cons (+ cx (* (- r 7) (cos back))) (+ cy (* (- r 7) (sin back))))))
-  (cond [(inside-polygon? head x y) 1]
-        [(and (< (abs (- d r)) 2.2) (<= t0 t (- t1 0.2))) 1]
-        [else #f]))
+(define (march o d)                                          ; → (t . material), or #f
+  (let loop ([t 0.0] [i 0])
+    (cond [(or (> i 160) (> t 30.0)) #f]
+          [else (define h (scene (v+ o (v* d t))))
+                (if (< (car h) 0.001) (cons t (cdr h)) (loop (+ t (* 0.8 (car h))) (+ i 1)))])))
 
-;; --- light: from the wand, up on the right ---
+(define (shadow p l)                                         ; soft shadow towards the point l, ∈ [0, 1]
+  (define d (v- l p)) (define far (len d)) (define u (v* d (/ 1.0 far)))
+  (let loop ([t 0.03] [k 1.0])
+    (cond [(> t (- far 0.12)) k]
+          [else (define h (distance (v+ p (v* u t))))
+                (if (< h 0.0005) 0.0 (loop (+ t (max 0.01 h)) (min k (/ (* 10 h) t))))])))
 
-(define (lit base x y) (max 0 (min 1 (+ base (* 0.18 (/ (- 230 x) 100)) (* 0.08 (/ (- y 200) 100))))))
-(define (folds x y) (* 0.2 (sin (/ (- x (* 0.25 (- y 170))) 7))))
+;; --- the camera: three quarters, from a little above ---
 
-;; --- the wizard ---
+(define eye (v 2.4 2.9 6.0)) (define target (v -0.05 1.55 0))
+(define fwd (unit (v- target eye))) (define right (unit (cross fwd (v 0 1 0)))) (define up (cross right fwd))
+(define zoom 2.45)
 
-(define robe '((158 . 168) (242 . 168) (262 . 250) (292 . 388) (108 . 388) (138 . 250)))
-(define hat '((206 . 30) (186 . 52) (166 . 112) (246 . 112) (226 . 66)))
-(define beard '((176 . 150) (224 . 150) (232 . 190) (216 . 238) (200 . 268) (184 . 238) (168 . 190)))
-(define sleeve-left '((160 . 168) (184 . 200) (150 . 188) (122 . 174) (106 . 162) (126 . 138) (142 . 152)))   ; raised, holding the circle
-(define sleeve-right '((238 . 170) (256 . 168) (276 . 222) (306 . 244) (286 . 268) (258 . 252) (246 . 214)))
+(define (ray sx sy)                                          ; screen coordinates in [-1, 1], y up
+  (unit (v+ fwd (v* (v+ (v* right sx) (v* up sy)) (/ 1.0 zoom)))))
 
-(define orb-x 112) (define orb-y 102) (define orb-r 46)      ; the eval/apply circle
+(define (project p)                                          ; → canvas (x . y)
+  (define q (v- p eye)) (define z (dot q fwd))
+  (cons (+ C (* C zoom (/ (dot q right) z))) (- C (* C zoom (/ (dot q up) z)))))
 
-(define scene
-  (list
-   ;; the disc's frame: two rings
-   (λ (x y) (let ([d (sqrt (+ (sqr (- x C)) (sqr (- y C))))])
-              (and (or (< (abs (- d frame)) 2.2) (< (abs (- d (- frame 7))) 0.9)) 1)))
-   ;; robe, sleeves, hands
-   (polygon robe (λ (x y) (lit (+ 0.66 (folds x y)) x y)))
-   (polygon sleeve-right (λ (x y) (lit (+ 0.72 (folds x y)) x y)))
-   (polygon sleeve-left (λ (x y) (lit 0.8 x y)))
-   (ellipse 116 150 9 8 (λ (x y) 0.12))
-   (ellipse 290 254 8 9 (λ (x y) 0.12))
-   ;; the wand, and its light
-   (stroke '(276 . 318) '(322 . 128) 2.2 0.95)
-   (λ (x y) (let ([d (sqrt (+ (sqr (- x 324)) (sqr (- y 122))))]
-                  [a (atan (- y 122) (- x 324))])
-              (and (< d 22)
-                   (if (< d 3.5) 1 (and (< (abs (sin (* 4 a))) (* 0.35 (- 1 (/ d 22)))) 0.9)))))
-   ;; head: face, beard, hat
-   (ellipse 200 142 24 22 (λ (x y) (lit 0.08 x y)))
-   (stroke '(186 . 133) '(197 . 136) 2.2 0.95)               ; brows, and eyes
-   (stroke '(203 . 136) '(214 . 133) 2.2 0.95)
-   (stroke '(191 . 141) '(195 . 141) 1.6 0.95)
-   (stroke '(205 . 141) '(209 . 141) 1.6 0.95)
-   (polygon beard (λ (x y) (+ 0.1 (* 0.1 (abs (sin (/ x 2.5)))))))
-   (ellipse 200 149 4.5 7 (λ (x y) (lit 0.12 x y)))           ; the nose, over the moustache
-   (polygon hat (λ (x y) (lit 0.85 x y)))
-   (ellipse 206 112 62 10 (λ (x y) (lit 0.9 x y)))
-   ;; the eval/apply circle: two arrows that chase each other
-   (ellipse orb-x orb-y orb-r orb-r (λ (x y) 0))
-   (arrow orb-x orb-y (- orb-r 13) (* -0.92 pi) (* -0.08 pi))
-   (arrow orb-x orb-y (- orb-r 13) (* 0.08 pi) (* 0.92 pi))))
+;; --- light ---
 
-;; ink ∈ [0, 1] at a point: the first shape that covers it, painted last to first
+(define key (v -1.5 3.2 7.0))                                ; a soft light from the front left, for the form
+(define albedo
+  (hash 'robe 0.55 'hat 0.5 'skin 0.95 'beard 1.0 'wand 0.2 'orb 1.0 'floor-light 1.0 'floor-dark 0.12))
+
+(define (floor-tile p)
+  (cond [(> (sqrt (+ (sqr (vx p)) (sqr (vz p)))) 3.2) 'none] ; the floor ends: white paper beyond
+        [(odd? (+ (exact-floor (/ (vx p) 0.6)) (exact-floor (/ (vz p) 0.6)))) 'floor-dark]
+        [else 'floor-light]))
+
+;; → (brightness ∈ [0, 1] . what was hit)
+(define (shade sx sy)
+  (define d (ray sx sy))
+  (define hit (march eye d))
+  (define p (and hit (v+ eye (v* d (car hit)))))
+  (define m (and hit (if (eq? (cdr hit) 'floor) (floor-tile p) (cdr hit))))
+  (cond
+    [(or (not hit) (eq? m 'none)) (cons 1.0 'sky)]
+    [else
+     (define n (normal p))
+     (define lit
+       (for/sum ([l (list wand-tip key)] [power (list 1.5 0.7)])
+         (define to (v- l p)) (define dist (len to))
+         (define diffuse (max 0.0 (dot n (v* to (/ 1.0 dist)))))
+         (define fall (if (eq? l wand-tip) (/ 1.0 (+ 1.0 (* 0.12 (sqr dist)))) 1.0))
+         (* power diffuse fall (shadow (v+ p (v* n 0.004)) l))))
+     (define rim (* 0.25 (expt (- 1 (max 0.0 (dot n (v* d -1.0)))) 3)))  ; a little light on the contours
+     (cons (min 1.0 (* (hash-ref albedo m) (+ 0.2 lit rim))) (cdr hit))]))
+
+;; --- the light, on a grid; the edges between objects ---
+
+(define grid (make-vector (* G G)))
+(for* ([j G] [i G])
+  (define sx (- (* 2.0 (/ (+ i 0.5) G)) 1.0)) (define sy (- 1.0 (* 2.0 (/ (+ j 0.5) G))))
+  (vector-set! grid (+ i (* j G)) (shade sx sy)))
+
+(define (cell i j) (vector-ref grid (+ (max 0 (min (- G 1) i)) (* (max 0 (min (- G 1) j)) G))))
+(define (edge? i j)                                          ; another object next to this pixel
+  (define m (cdr (cell i j)))
+  (and (not (memq m '(floor sky)))
+       (for/or ([o '((1 . 0) (0 . 1) (-1 . 0) (0 . -1))])
+         (not (eq? (cdr (cell (+ i (car o)) (+ j (cdr o)))) m)))))
+
+;; ink ∈ [0, 1] at a canvas point, or #f outside the disc
 (define (ink x y)
   (define d (sqrt (+ (sqr (- x C)) (sqr (- y C)))))
-  (cond [(> d (+ frame 3)) #f]                               ; outside the disc: transparent
-        [else (or (for/or ([s (reverse scene)]) (s x y)) 0)]))
+  (cond [(> d (+ frame 3)) #f]
+        [(or (< (abs (- d frame)) 2.2) (< (abs (- d (- frame 7))) 0.9)) 1.0]       ; the frame
+        [(> d (- frame 9)) 0.0]
+        [else
+         (define i (exact-floor (* G (/ x S)))) (define j (exact-floor (* G (/ y S))))
+         (if (edge? i j) 0.95 (- 1.0 (car (cell i j))))]))
 
-;; Stippling, as in the banner: kept with probability ink, never too close.
-(define cell 10)
+;; --- the eval/apply circle, drawn on the orb as it faces us: two arrows chasing each other ---
+
+(define orb-c (project orb))
+(define orb-pr (- (car (project (v+ orb (v* right orb-r)))) (car orb-c)))     ; its radius on the canvas
+
+(define (inside-triangle? a b c x y)
+  (define (s p q) (- (* (- (car q) (car p)) (- y (cdr p))) (* (- (cdr q) (cdr p)) (- x (car p)))))
+  (define s1 (s a b)) (define s2 (s b c)) (define s3 (s c a))
+  (or (and (>= s1 0) (>= s2 0) (>= s3 0)) (and (<= s1 0) (<= s2 0) (<= s3 0))))
+
+(define (arrows x y)
+  (define r (* 0.72 orb-pr))
+  (define dx (- x (car orb-c))) (define dy (- y (cdr orb-c)))
+  (define d (sqrt (+ (sqr dx) (sqr dy))))
+  (define t (atan dy dx))
+  (define (head t1)                                          ; a small triangle at angle t1, along the circle
+    (define back (- t1 0.32))
+    (inside-triangle? (cons (* r (cos t1)) (* r (sin t1)))
+                      (cons (* (+ r 5) (cos back)) (* (+ r 5) (sin back)))
+                      (cons (* (- r 5) (cos back)) (* (- r 5) (sin back)))
+                      dx dy))
+  (or (sparkle x y)
+      (and (< (abs (- d r)) 1.6)
+           (or (< (* -0.9 pi) t (* -0.18 pi)) (< (* 0.1 pi) t (* 0.82 pi))))
+      (head (* -0.1 pi)) (head (* 0.9 pi))))
+
+;; the star of the wand: a core and eight rays, where the light comes from
+(define star (project wand-tip))
+(define (sparkle x y)
+  (define dx (- x (car star))) (define dy (- y (cdr star)))
+  (define d (sqrt (+ (sqr dx) (sqr dy))))
+  (and (< d 20) (or (< d 3) (< (abs (sin (* 4 (atan dy dx)))) (* 0.3 (- 1 (/ d 20)))))))
+
+;; --- stippling, as in the banner ---
+
+(define cellsize 10)
 (define (stipple n)
   (random-seed 1985)                                         ; SICP, first edition
-  (define grid (make-hash))
-  (define (key x y) (cons (quotient (exact-floor x) cell) (quotient (exact-floor y) cell)))
+  (define near (make-hash))
+  (define (key x y) (cons (quotient (exact-floor x) cellsize) (quotient (exact-floor y) cellsize)))
   (define (near? x y spacing)
     (for*/or ([i (in-range -1 2)] [j (in-range -1 2)])
       (define k (key x y))
-      (for/or ([p (hash-ref grid (cons (+ (car k) i) (+ (cdr k) j)) '())])
+      (for/or ([p (hash-ref near (cons (+ (car k) i) (+ (cdr k) j)) '())])
         (< (+ (sqr (- x (car p))) (sqr (- y (cdr p)))) (sqr spacing)))))
   (for/fold ([dots '()]) ([_ n])
     (define x (* S (random))) (define y (* S (random)))
-    (define b (or (ink x y) 0))
-    (cond [(and (< (random) (expt b 0.8)) (not (near? x y (+ 2.7 (* 8 (expt (- 1 b) 1.5))))))
-           (hash-update! grid (key x y) (λ (l) (cons (cons x y) l)) '())
+    (define b (if (arrows x y) 1.0 (or (ink x y) 0.0)))
+    (cond [(and (< (random) (expt b 0.8)) (not (near? x y (+ 2.4 (* 8 (expt (- 1 b) 1.5))))))
+           (hash-update! near (key x y) (λ (l) (cons (cons x y) l)) '())
            (cons (cons x y) dots)]
           [else dots])))
 
@@ -136,8 +214,8 @@
     (printf "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ~a ~a\" width=\"~a\" height=\"~a\" role=\"img\" aria-label=\"a wizard with a wand and the eval/apply circle\">\n" S S S S)
     (printf "<circle cx=\"~a\" cy=\"~a\" r=\"~a\" fill=\"#fff\"/>\n<g fill=\"#111\">\n" C C (+ frame 3))
     (for ([p dots])
-      (printf "<circle cx=\"~a\" cy=\"~a\" r=\"1.5\"/>\n" (/ (round (* 10 (car p))) 10) (/ (round (* 10 (cdr p))) 10)))
-    (printf "</g>\n<g fill=\"#111\" font-family=\"monospace\" font-size=\"11\" text-anchor=\"middle\">\n")
-    (printf "<text x=\"~a\" y=\"~a\">eval</text>\n" orb-x (- orb-y 3))
-    (printf "<text x=\"~a\" y=\"~a\">apply</text>\n" orb-x (+ orb-y 12))
+      (printf "<circle cx=\"~a\" cy=\"~a\" r=\"1.35\"/>\n" (/ (round (* 10 (car p))) 10) (/ (round (* 10 (cdr p))) 10)))
+    (printf "</g>\n<g fill=\"#111\" font-family=\"monospace\" font-size=\"~a\" text-anchor=\"middle\">\n" (exact-round (* 0.36 orb-pr)))
+    (printf "<text x=\"~a\" y=\"~a\">eval</text>\n" (exact-round (car orb-c)) (exact-round (- (cdr orb-c) (* 0.08 orb-pr))))
+    (printf "<text x=\"~a\" y=\"~a\">apply</text>\n" (exact-round (car orb-c)) (exact-round (+ (cdr orb-c) (* 0.38 orb-pr))))
     (printf "</g>\n</svg>\n")))
