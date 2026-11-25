@@ -14,18 +14,23 @@
 (define (brightness x y)
   (define u (/ (- x cx) R)) (define v (/ (- y cy) R))
   (define rho (sqrt (+ (sqr u) (sqr v))))
-  (define beam (- 1 (* 0.45 (/ u (max rho 1e-9)))))          ; Doppler: the side coming towards us is brighter
-  ;; the thin disk, seen almost edge-on: in front of the shadow below, hidden by it above
+  (define side (- 1 (* 0.25 (/ u (max rho 1e-9)))))          ; Doppler, mild: the side coming towards us is brighter
+  ;; the thin disk, seen almost edge-on: in front of the shadow, across it
   (define rd (sqrt (+ (sqr u) (sqr (/ v tilt)))))
   (define disk
-    (if (and (< 1.5 rd 3.6) (or (> v 0) (> rho 1)))
-        (* 0.95 (expt (/ 1.5 rd) 1.2) (- 1 (* 0.4 (/ u rd))))
+    (if (and (< 1.25 rd 3.8) (or (> v 0) (> rho 1.05)))
+        (* 0.9 (expt (/ 1.25 rd) 0.8) (- 1 (* 0.25 (/ u rd))) (min 1 (* 3 (- 3.8 rd))))
         0))
-  ;; the far side of the disk, bent by gravity into a halo around the shadow, and the photon ring
-  (define halo (if (> rho 1) (* 0.55 (exp (- (sqr (/ (- rho 1.45) 0.32))))) 0))
-  (define ring (* 0.9 (exp (- (sqr (/ (- rho 1.08) 0.07))))))
+  ;; the far side of the disk, bent by gravity: a thick arc over the shadow, thin at its sides,
+  ;; and a fainter, thinner one under it; then the photon ring, hugging the shadow
+  (define s (abs (/ v (max rho 1e-9))))                      ; 1 above and below, 0 at the sides
+  (define arc
+    (cond [(<= rho 1) 0]
+          [(< v 0) (* 0.8 (exp (- (sqr (/ (- rho 1.3) (+ 0.06 (* 0.32 s)))))))]
+          [else (* 0.4 (exp (- (sqr (/ (- rho 1.12) (+ 0.04 (* 0.08 s)))))))]))
+  (define ring (* 0.95 (exp (- (sqr (/ (- rho 1.04) 0.05))))))
   (define stars (if (> rho 1) (* 0.00004 (max 0 (min 1 (/ (- x 640) 240)))) 0)) ; a few, away from the name
-  (max 0 (min 1 (+ stars (* beam (+ halo ring)) disk))))
+  (max 0 (min 1 (+ stars (* side (max arc ring)) disk))))
 
 ;; Stippling: candidates in random order, kept with probability brightness, never too close.
 (define cell 12)
