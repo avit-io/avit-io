@@ -1,12 +1,12 @@
 #lang racket/base
 ;; The avatar: a wizard with a wand in one hand and the eval/apply circle in the other, standing
-;; on a tiled floor in perspective; drawn by stippling, black dots on a white disc.
+;; on a tiled floor in perspective; drawn by stippling, nero dots on an ochre disc (Ocra).
 ;; The scene is solid: cones, spheres and capsules, seen by a camera from three quarters and lit
 ;; by the star of the wand. Each pixel's light is found by ray marching (distance fields); the
 ;; dots follow the darkness, the outlines follow the edges between objects.
 ;; racket tools/wizard.rkt   (writes wizard.svg; deterministic)
 
-(require racket/math racket/list)
+(require racket/math racket/list "puntini.rkt")
 
 (define S 400) (define C 200) (define frame 184)            ; the canvas and the disc
 (define G 300)                                               ; the light is computed on a G×G grid
@@ -187,35 +187,19 @@
   (define d (sqrt (+ (sqr dx) (sqr dy))))
   (and (< d 20) (or (< d 3) (< (abs (sin (* 4 (atan dy dx)))) (* 0.3 (- 1 (/ d 20)))))))
 
-;; --- stippling, as in the banner ---
+;; --- stippling, with the engine ---
 
-(define cellsize 10)
-(define (stipple n)
-  (random-seed 1985)                                         ; SICP, first edition
-  (define near (make-hash))
-  (define (key x y) (cons (quotient (exact-floor x) cellsize) (quotient (exact-floor y) cellsize)))
-  (define (near? x y spacing)
-    (for*/or ([i (in-range -1 2)] [j (in-range -1 2)])
-      (define k (key x y))
-      (for/or ([p (hash-ref near (cons (+ (car k) i) (+ (cdr k) j)) '())])
-        (< (+ (sqr (- x (car p))) (sqr (- y (cdr p)))) (sqr spacing)))))
-  (for/fold ([dots '()]) ([_ n])
-    (define x (* S (random))) (define y (* S (random)))
-    (define b (if (arrows x y) 1.0 (or (ink x y) 0.0)))
-    (cond [(and (< (random) (expt b 0.8)) (not (near? x y (+ 2.4 (* 8 (expt (- 1 b) 1.5))))))
-           (hash-update! near (key x y) (λ (l) (cons (cons x y) l)) '())
-           (cons (cons x y) dots)]
-          [else dots])))
+(define dots (stipple (λ (u v) (let ([x (* S u)] [y (* S v)]) (if (arrows x y) 1.0 (ink x y)))) S S
+                      #:n 700000 #:seed 1985 #:spacing 2.4 #:spread 8 #:cell 10)) ; SICP, first edition
 
-(define dots (reverse (stipple 700000)))
-
-(with-output-to-file "wizard.svg" #:exists 'truncate
+(with-output-to-file "wizard.svg" #:exists (quote truncate)
   (λ ()
-    (printf "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ~a ~a\" width=\"~a\" height=\"~a\" role=\"img\" aria-label=\"a wizard with a wand and the eval/apply circle\">\n" S S S S)
-    (printf "<circle cx=\"~a\" cy=\"~a\" r=\"~a\" fill=\"#fff\"/>\n<g fill=\"#111\">\n" C C (+ frame 3))
-    (for ([p dots])
-      (printf "<circle cx=\"~a\" cy=\"~a\" r=\"1.35\"/>\n" (/ (round (* 10 (car p))) 10) (/ (round (* 10 (cdr p))) 10)))
-    (printf "</g>\n<g fill=\"#111\" font-family=\"monospace\" font-size=\"~a\" text-anchor=\"middle\">\n" (exact-round (* 0.36 orb-pr)))
-    (printf "<text x=\"~a\" y=\"~a\">eval</text>\n" (exact-round (car orb-c)) (exact-round (- (cdr orb-c) (* 0.08 orb-pr))))
-    (printf "<text x=\"~a\" y=\"~a\">apply</text>\n" (exact-round (car orb-c)) (exact-round (+ (cdr orb-c) (* 0.38 orb-pr))))
-    (printf "</g>\n</svg>\n")))
+    (display
+     (svg dots S S #:theme ocra-light #:r 1.35 #:label "a wizard with a wand and the eval/apply circle"
+          #:background (λ (paper) (format "<circle cx=\"~a\" cy=\"~a\" r=\"~a\" fill=\"~a\"/>\n" C C (+ frame 3) paper))
+          #:extra (λ (ink)
+                    (string-append
+                     (format "<g fill=\"~a\" font-family=\"monospace\" font-size=\"~a\" text-anchor=\"middle\">\n" ink (exact-round (* 0.36 orb-pr)))
+                     (format "<text x=\"~a\" y=\"~a\">eval</text>\n" (exact-round (car orb-c)) (exact-round (- (cdr orb-c) (* 0.08 orb-pr))))
+                     (format "<text x=\"~a\" y=\"~a\">apply</text>\n" (exact-round (car orb-c)) (exact-round (+ (cdr orb-c) (* 0.38 orb-pr))))
+                     "</g>\n"))))))
