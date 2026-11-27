@@ -7,7 +7,7 @@
 ;; racket tools/puntini.rkt   (runs the check)
 
 (require racket/math (only-in racket/port with-output-to-string))
-(provide disc sphere glow gradient
+(provide disc sphere glow gradient rect segment
          over mask scale-ink transform-painter beside below flip-horiz
          stipple svg ocra-light ocra-dark)
 
@@ -27,6 +27,15 @@
 
 ;; a halo: ink that falls off with the distance, for light and for haze
 (define ((glow cu cv r [ink 1.0]) u v) (* ink (exp (- (sqr (/ (dist u v cu cv) r))))))
+
+;; a filled box from (u0, v0) to (u1, v1)
+(define ((rect u0 v0 u1 v1 [ink 1.0]) u v) (if (and (<= u0 u u1) (<= v0 v v1)) ink 0.0))
+
+;; a stroke from a to b, w thick: pointers and frames
+(define ((segment a b w [ink 1.0]) u v)
+  (define-values (ax ay dx dy) (values (car a) (cdr a) (- (car b) (car a)) (- (cdr b) (cdr a))))
+  (define t (max 0.0 (min 1.0 (/ (+ (* (- u ax) dx) (* (- v ay) dy)) (+ (sqr dx) (sqr dy))))))
+  (if (<= (dist u v (+ ax (* t dx)) (+ ay (* t dy))) (/ w 2)) ink 0.0))
 
 ;; from ink a at the top to ink b at the bottom
 (define ((gradient a b) u v) (+ a (* (- b a) v)))
@@ -109,4 +118,7 @@
     (error 'puntini "the lit side is not lighter"))
   (unless (equal? ((transform-painter (gradient 0 1) '(0 . 0) '(1 . 0) '(0 . 1/2)) 0.3 0.25) 0.5)
     (error 'puntini "frame transform"))
+  (unless (and (= 1.0 ((segment '(0 . 0) '(1 . 1) 0.02) 0.5 0.5)) (= 0.0 ((segment '(0 . 0) '(1 . 1) 0.02) 0.5 0.6))
+               (= 1.0 ((rect 0.2 0.2 0.4 0.4) 0.3 0.3)) (= 0.0 ((rect 0.2 0.2 0.4 0.4) 0.5 0.3)))
+    (error 'puntini "rect or segment"))
   (printf "puntini: ok (~a dots, ~a on the light side)\n" (length d) left))
